@@ -24,8 +24,8 @@ class AuthenticationService(
     fun login(credentials: Credentials): Mono<Response<Token>> = userRepository.findByUsername(credentials.username)
             .map { savedUser ->
                 if (passwordEncoder.encode(credentials.password) == savedUser.password) {
-                    val token = jwtUtil.generateToken(savedUser)
-                    Response.success(Token(token))
+                    val token = Token(jwtUtil.generateToken(savedUser))
+                    Response.success(token)
                 } else {
                     Response.error(status = HttpStatus.BAD_REQUEST, message = "Incorrect password")
                 }
@@ -34,39 +34,41 @@ class AuthenticationService(
                     message = "No user with username '${credentials.username}'"
             ))
 
-    fun register(user: User): Mono<Response<User>> = userRepository.findByEmail(user.email)
-            .flatMap {
-                Mono.just(Response.error<User>(
-                        HttpStatus.BAD_REQUEST,
-                        "Email '${user.email}' already exists"
-                ))
-            }
-            .defaultIfEmpty(Response.success(user))
-            .flatMap { emailValidationResponse ->
-                if (emailValidationResponse.isSuccessful()) {
-                    userRepository.findByUsername(user.username)
-                            .flatMap {
-                                Mono.just(Response.error<User>(
-                                        HttpStatus.BAD_REQUEST,
-                                        "Username '${user.username}' already exists"
-                                ))
-                            }
-                            .defaultIfEmpty(emailValidationResponse)
-                            .flatMap { usernameValidationResponse ->
-                                if (usernameValidationResponse.isSuccessful()) {
-                                    user.apply {
-                                        roles = listOf(Role.ROLE_USER)
-                                        password = passwordEncoder.encode(password)
+    fun register(user: User, roles: List<Role> = listOf(Role.ROLE_USER)): Mono<Response<Token>> =
+            userRepository.findByEmail(user.email)
+                    .flatMap {
+                        Mono.just(Response.error<Token>(
+                                HttpStatus.BAD_REQUEST,
+                                "Email '${user.email}' already exists"
+                        ))
+                    }
+                    .defaultIfEmpty(Response.success(null))
+                    .flatMap { emailValidationResponse ->
+                        if (emailValidationResponse.isSuccessful()) {
+                            userRepository.findByUsername(user.username)
+                                    .flatMap {
+                                        Mono.just(Response.error<Token>(
+                                                HttpStatus.BAD_REQUEST,
+                                                "Username '${user.username}' already exists"
+                                        ))
                                     }
-                                    userRepository.save(user).flatMap { savedUser ->
-                                        Mono.just(Response.success(savedUser))
+                                    .defaultIfEmpty(emailValidationResponse)
+                                    .flatMap { usernameValidationResponse ->
+                                        if (usernameValidationResponse.isSuccessful()) {
+                                            user.let { payloadUser ->
+                                                payloadUser.roles = roles
+                                                payloadUser.password = passwordEncoder.encode(payloadUser.password)
+                                            }
+                                            userRepository.save(user).flatMap { savedUser ->
+                                                val token = Token(jwtUtil.generateToken(savedUser))
+                                                Mono.just(Response.success(token))
+                                            }
+                                        } else {
+                                            Mono.just(usernameValidationResponse)
+                                        }
                                     }
-                                } else {
-                                    Mono.just(usernameValidationResponse)
-                                }
-                            }
-                } else {
-                    Mono.just(emailValidationResponse)
-                }
-            }
+                        } else {
+                            Mono.just(emailValidationResponse)
+                        }
+                    }
 }
